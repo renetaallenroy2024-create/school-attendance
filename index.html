@@ -1,0 +1,414 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sankar School | Attendance Management</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:15px Arial,sans-serif;background:#f5f7fb;color:#202b40}
+button,input,select{font:inherit;padding:11px;border:1px solid #d8deea;border-radius:7px}
+button{background:#3157b7;color:white;border:0;cursor:pointer}
+button:hover{opacity:.88}
+input,select{background:white;max-width:100%}
+header{background:#233b70;color:white;padding:20px}
+header h2{margin:0 0 5px}
+header p{margin:0;color:#dbe5ff}
+main{max-width:1100px;margin:25px auto;padding:0 16px}
+.card{background:white;padding:20px;border:1px solid #e1e6ef;border-radius:12px;margin-bottom:18px}
+h3{margin-top:0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1;min-width:120px}
+nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+nav button{background:#e6ebf7;color:#233b70}
+nav button.active{background:#3157b7;color:white}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th,td{text-align:left;padding:11px 8px;border-bottom:1px solid #e5e9f1}
+th{background:#f4f6fb}
+.scroll{overflow-x:auto}
+small,.muted{color:#68758b}
+#message{padding:12px 0;white-space:pre-wrap}
+.hidden{display:none!important}
+.stat{font-size:27px;font-weight:bold;margin-top:8px}
+.status{min-width:100px}
+@media(max-width:600px){main{margin-top:14px}.card{padding:14px}th,td{padding:9px 5px;font-size:13px}}
+</style>
+</head>
+<body>
+<header>
+<h2>Sankar Matriculation School</h2>
+<p>Online Attendance Management System · Sankagiri West</p>
+</header>
+<main>
+<div id="message" role="status"></div>
+
+<section id="login" class="card">
+<h3>Sign in</h3>
+<p class="muted">Sign in with your authorized school account.</p>
+<form id="loginForm">
+<p><input id="email" type="email" placeholder="Email address" required style="width:100%"></p>
+<p><input id="password" type="password" placeholder="Password" required style="width:100%"></p>
+<button type="submit">Sign in</button>
+</form>
+</section>
+
+<section id="app" class="hidden">
+<div class="card row">
+<div><strong id="welcome">Welcome</strong><p class="muted" id="roleLabel"></p></div>
+<button id="logout" style="flex:0 0 auto">Sign out</button>
+</div>
+<nav id="nav"></nav>
+
+<section id="dashboard" class="page card">
+<h3>Dashboard</h3>
+<div class="row">
+<div class="card"><span class="muted">Students</span><div id="studentCount" class="stat">0</div></div>
+<div class="card"><span class="muted">Classes</span><div id="classCount" class="stat">0</div></div>
+<div class="card"><span class="muted">Today's records</span><div id="recordCount" class="stat">0</div></div>
+</div>
+<p>Use the menu to manage students, mark attendance and view reports.</p>
+</section>
+
+<section id="classes" class="page card hidden">
+<h3>Classes and sections</h3>
+<form id="classForm" class="row adminOnly">
+<input id="className" placeholder="Class (e.g. 10)" required>
+<input id="sectionName" placeholder="Section (e.g. A)" required>
+<button>Add class</button>
+</form>
+<div class="scroll"><table><thead><tr><th>Class</th><th>Section</th></tr></thead><tbody id="classRows"></tbody></table></div>
+</section>
+
+<section id="students" class="page card hidden">
+<h3>Student management</h3>
+<form id="studentForm" class="adminOnly">
+<div class="row">
+<input id="admission" placeholder="Admission number" required>
+<input id="studentName" placeholder="Student full name" required>
+<select id="studentClass" required></select>
+<button>Add student</button>
+</div>
+</form>
+<p><input id="studentSearch" placeholder="Search by name or admission number" style="width:100%"></p>
+<div class="scroll"><table><thead><tr><th>Admission No.</th><th>Name</th><th>Class</th><th>Section</th></tr></thead><tbody id="studentRows"></tbody></table></div>
+</section>
+
+<section id="attendance" class="page card hidden">
+<h3>Mark attendance</h3>
+<div class="row">
+<select id="attendanceClass" required></select>
+<input id="attendanceDate" type="date" required>
+<button id="loadStudents" type="button">Load students</button>
+</div>
+<p class="muted">Select a status for each student, then save.</p>
+<div class="scroll"><table><thead><tr><th>Student</th><th>Admission No.</th><th>Status</th></tr></thead><tbody id="attendanceRows"></tbody></table></div>
+<button id="saveAttendance" type="button">Save attendance</button>
+</section>
+
+<section id="reports" class="page card hidden">
+<h3>Attendance reports</h3>
+<div class="row">
+<select id="reportClass"></select>
+<input id="reportFrom" type="date">
+<input id="reportTo" type="date">
+<button id="runReport" type="button">Generate report</button>
+</div>
+<div id="reportSummary"></div>
+<div class="scroll"><table><thead><tr><th>Admission No.</th><th>Student</th><th>Present</th><th>Absent</th><th>Leave</th><th>Attendance %</th></tr></thead><tbody id="reportRows"></tbody></table></div>
+</section>
+</section>
+</main>
+
+<script>
+const SUPABASE_URL = "https://gjlwdvjjubdxggurnhdy.supabase.co";
+const SUPABASE_KEY = "sb_publishable_P5DUT51PJ99pw-Gek4z-dQ_8__HVgaT";
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let currentUser = null;
+let currentRole = null;
+let classes = [];
+let students = [];
+
+const $ = id => document.getElementById(id);
+const today = new Date().toLocaleDateString("en-CA");
+$("attendanceDate").value = today;
+$("reportFrom").value = today.slice(0,8) + "01";
+$("reportTo").value = today;
+
+function message(text) { $("message").textContent = text; }
+function fail(error) {
+  console.error(error);
+  message(error.message || "Something went wrong.");
+}
+function isAdmin() { return currentRole === "admin"; }
+
+async function request(promise) {
+  const {data,error} = await promise;
+  if(error) throw error;
+  return data;
+}
+
+$("loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  message("Signing in...");
+  try {
+    const {error} = await db.auth.signInWithPassword({
+      email:$("email").value.trim(),
+      password:$("password").value
+    });
+    if(error) throw error;
+    await initialize();
+  } catch(error) { fail(error); }
+});
+
+$("logout").onclick = async () => {
+  await db.auth.signOut();
+  currentUser = null;
+  currentRole = null;
+  $("app").classList.add("hidden");
+  $("login").classList.remove("hidden");
+  message("Signed out.");
+};
+
+function showPage(id) {
+  document.querySelectorAll(".page").forEach(p => p.classList.add("hidden"));
+  $(id).classList.remove("hidden");
+  document.querySelectorAll("#nav button").forEach(b =>
+    b.classList.toggle("active",b.dataset.page===id));
+}
+
+function buildNav() {
+  const items = [
+    ["dashboard","Dashboard"],
+    ["classes","Classes"],
+    ["students","Students"],
+    ["attendance","Attendance"],
+    ["reports","Reports"]
+  ];
+  $("nav").innerHTML = "";
+  items.forEach(([id,label]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.dataset.page = id;
+    b.onclick = () => showPage(id);
+    $("nav").appendChild(b);
+  });
+  document.querySelectorAll(".adminOnly").forEach(el =>
+    el.classList.toggle("hidden",!isAdmin()));
+}
+
+async function initialize() {
+  try {
+    const {data:{user}} = await db.auth.getUser();
+    if(!user) {
+      $("login").classList.remove("hidden");
+      $("app").classList.add("hidden");
+      return;
+    }
+    currentUser = user;
+    const profile = await request(
+      db.from("profiles").select("full_name,role").eq("id",user.id).single()
+    );
+    if(!["admin","teacher"].includes(profile.role))
+      throw new Error("Your account has no valid school role. Contact the administrator.");
+
+    currentRole = profile.role;
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    $("welcome").textContent = profile.full_name || user.email;
+    $("roleLabel").textContent = "Role: " + currentRole;
+    buildNav();
+    await refreshAll();
+    showPage("dashboard");
+    message("");
+  } catch(error) { fail(error); }
+}
+
+async function refreshAll() {
+  classes = await request(
+    db.from("classes").select("*").order("class_name")
+  );
+  students = await request(
+    db.from("students").select("*,classes(class_name,section)")
+      .order("full_name")
+  );
+
+  function fillSelect(id,placeholder) {
+    const select = $(id);
+    select.innerHTML = "";
+    if(placeholder) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = placeholder;
+      select.appendChild(opt);
+    }
+    classes.forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = c.class_name + " - " + c.section;
+      select.appendChild(opt);
+    });
+  }
+
+  fillSelect("studentClass","Choose class");
+  fillSelect("attendanceClass","Choose class");
+  fillSelect("reportClass","All classes");
+
+  $("classCount").textContent = classes.length;
+  $("studentCount").textContent = students.length;
+  renderClasses();
+  renderStudents();
+  await updateTodayCount();
+}
+
+function renderClasses() {
+  $("classRows").innerHTML = classes.map(c =>
+    `<tr><td>${esc(c.class_name)}</td><td>${esc(c.section)}</td></tr>`
+  ).join("");
+}
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g,c=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[c]);
+}
+
+function renderStudents() {
+  const q = $("studentSearch").value.toLowerCase();
+  $("studentRows").innerHTML = students.filter(s =>
+    (s.full_name+" "+s.admission_number).toLowerCase().includes(q)
+  ).map(s => `<tr>
+    <td>${esc(s.admission_number)}</td>
+    <td>${esc(s.full_name)}</td>
+    <td>${esc(s.classes?.class_name)}</td>
+    <td>${esc(s.classes?.section)}</td>
+  </tr>`).join("");
+}
+$("studentSearch").addEventListener("input",renderStudents);
+
+$("classForm").onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await request(db.from("classes").insert({
+      class_name:$("className").value.trim(),
+      section:$("sectionName").value.trim()
+    }));
+    e.target.reset();
+    await refreshAll();
+    message("Class added.");
+  } catch(error) { fail(error); }
+};
+
+$("studentForm").onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await request(db.from("students").insert({
+      admission_number:$("admission").value.trim(),
+      full_name:$("studentName").value.trim(),
+      class_id:Number($("studentClass").value)
+    }));
+    e.target.reset();
+    await refreshAll();
+    message("Student added.");
+  } catch(error) { fail(error); }
+};
+
+async function updateTodayCount() {
+  const count = await request(
+    db.from("attendance").select("id",{count:"exact",head:true})
+      .eq("attendance_date",today)
+  );
+  $("recordCount").textContent = count.length ?? 0;
+}
+
+$("loadStudents").onclick = async () => {
+  try {
+    const classId = $("attendanceClass").value;
+    const date = $("attendanceDate").value;
+    if(!classId || !date) throw new Error("Choose a class and date.");
+    const list = students.filter(s=>String(s.class_id)===classId);
+    const records = await request(
+      db.from("attendance").select("student_id,status")
+        .eq("attendance_date",date)
+        .in("student_id",list.map(s=>s.id).length ? list.map(s=>s.id) : [-1])
+    );
+    const statuses = Object.fromEntries(records.map(r=>[r.student_id,r.status]));
+    $("attendanceRows").innerHTML = list.map(s => `
+      <tr data-student="${s.id}">
+        <td>${esc(s.full_name)}</td>
+        <td>${esc(s.admission_number)}</td>
+        <td><select class="status">
+          ${["present","absent","leave"].map(v =>
+            `<option value="${v}" ${statuses[s.id]===v?"selected":""}>${v[0].toUpperCase()+v.slice(1)}</option>`
+          ).join("")}
+        </select></td>
+      </tr>`).join("");
+    message(list.length ? "Students loaded." : "No students found in this class.");
+  } catch(error) { fail(error); }
+};
+
+$("saveAttendance").onclick = async () => {
+  try {
+    const rows = [...$("attendanceRows").querySelectorAll("tr[data-student]")];
+    if(!rows.length) throw new Error("Load a class before saving.");
+    const date = $("attendanceDate").value;
+    const records = rows.map(row => ({
+      student_id:Number(row.dataset.student),
+      marked_by:currentUser.id,
+      attendance_date:date,
+      status:row.querySelector("select").value
+    }));
+    await request(db.from("attendance").upsert(records,{
+      onConflict:"student_id,attendance_date"
+    }));
+    await updateTodayCount();
+    message("Attendance saved successfully.");
+  } catch(error) { fail(error); }
+};
+
+$("runReport").onclick = async () => {
+  try {
+    const from = $("reportFrom").value;
+    const to = $("reportTo").value;
+    const classId = $("reportClass").value;
+    if(!from || !to || from>to) throw new Error("Choose a valid date range.");
+
+    let query = db.from("attendance")
+      .select("student_id,status,attendance_date")
+      .gte("attendance_date",from).lte("attendance_date",to);
+    const records = await request(query);
+    const visible = students.filter(s => !classId || String(s.class_id)===classId);
+    const byStudent = {};
+    records.forEach(r=>{
+      byStudent[r.student_id] ||= {present:0,absent:0,leave:0};
+      byStudent[r.student_id][r.status]++;
+    });
+
+    $("reportRows").innerHTML = visible.map(s=>{
+      const a = byStudent[s.id] || {present:0,absent:0,leave:0};
+      const total = a.present+a.absent+a.leave;
+      const pct = total ? (a.present/total*100).toFixed(1) : "0.0";
+      return `<tr>
+        <td>${esc(s.admission_number)}</td><td>${esc(s.full_name)}</td>
+        <td>${a.present}</td><td>${a.absent}</td><td>${a.leave}</td>
+        <td>${pct}%</td></tr>`;
+    }).join("");
+    $("reportSummary").textContent =
+      `Period: ${from} to ${to}. Attendance percentage = Present ÷ all recorded attendance × 100.`;
+    message("Report generated.");
+  } catch(error) { fail(error); }
+};
+
+db.auth.onAuthStateChange((event) => {
+  if(event==="SIGNED_OUT") {
+    $("app").classList.add("hidden");
+    $("login").classList.remove("hidden");
+  }
+});
+
+initialize();
+</script>
+</body>
+</html>
