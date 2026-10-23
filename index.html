@@ -316,11 +316,13 @@ $("studentForm").onsubmit = async e => {
 };
 
 async function updateTodayCount() {
-  const count = await request(
-    db.from("attendance").select("id",{count:"exact",head:true})
-      .eq("attendance_date",today)
-  );
-  $("recordCount").textContent = count.length ?? 0;
+  const { count, error } = await db
+    .from("attendance")
+    .select("id", { count: "exact", head: true })
+    .eq("attendance_date", today);
+
+  if (error) throw error;
+  $("recordCount").textContent = count ?? 0;
 }
 
 $("loadStudents").onclick = async () => {
